@@ -88,6 +88,17 @@ def parse_args():
     parser.add_argument("--stop-time", type=float, default=None)
     parser.add_argument("--topo-p", type=int, default=1)
     parser.add_argument("--topo-q", type=int, default=1)
+    parser.add_argument(
+        "--emulator",
+        choices=["on", "off"],
+        default="off",
+        help="Toggle emulator mode",
+    )
+    parser.add_argument(
+        "--emulator-model-path",
+        default=None,
+        help="Path to emulator model file",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
 
     return parser.parse_args()
@@ -125,6 +136,9 @@ def main():
 
     if args.seed is not None:
         np.random.seed(args.seed)
+
+    if args.emulator == "on" and not args.emulator_model_path:
+        raise ValueError("--emulator-model-path is required when --emulator is 'on'")
 
     paths = resolve_paths(args)
     ensemble_dir = paths["ensemble_dir"]
@@ -168,6 +182,12 @@ def main():
         run.Process.Topology.P = args.topo_p
         run.Process.Topology.Q = args.topo_q
 
+        if args.emulator == "on":
+            run.Solver.TorchEnableAccelerator = True
+            run.Solver.TorchModelFilePath = args.emulator_model_path
+            run.Solver.TorchPrintPredictedPressure = True
+            run.Solver.TorchDevice = "cuda"
+
         # --- Perturbations ---
         indicator_perturbed = False
         params_applied = {}
@@ -210,6 +230,8 @@ def main():
             "potts_temperature": args.potts_temperature,
             "potts_steps": args.potts_steps,
             "param_scale": args.param_scale,
+            "emulator": args.emulator,
+            "emulator_model_path": args.emulator_model_path,
             "geom_params": params_applied,
         }
         with open(os.path.join(member_dir, "perturbation.json"), "w") as f:
