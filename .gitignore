@@ -6,5 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Configuration/data
+data/
+run_scripts/
+
 # Virtual environments
 .venv
