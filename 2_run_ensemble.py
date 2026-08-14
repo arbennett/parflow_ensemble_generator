@@ -69,6 +69,11 @@ def parse_args():
 
     # --- Ensemble ---
     parser.add_argument("--n-ensemble", type=int, default=10, help="Number of ensemble members")
+    parser.add_argument(
+        "--overwrite-existing",
+        action="store_true",
+        help="Replace existing member directories instead of failing when they already exist",
+    )
     parser.add_argument("--modify-indicator", action="store_true", help="Perturb indicator field")
     parser.add_argument("--modify-parameters", action="store_true", help="Perturb subsurface parameters")
     parser.add_argument(
@@ -99,6 +104,34 @@ def parse_args():
         default=None,
         help="Path to emulator model file",
     )
+    parser.add_argument(
+        "--emulator-device",
+        choices=["cpu", "cuda"],
+        default="cpu",
+        help="Device used by the embedded Torch model",
+    )
+    parser.add_argument(
+        "--emulator-dtype",
+        choices=["kFloat", "kDouble"],
+        default="kFloat",
+        help="Torch model dtype; the MJB model was trained/exported as float32",
+    )
+    parser.add_argument(
+        "--emulator-include-ghost-nodes",
+        action="store_true",
+        help="Include horizontal ParFlow ghost cells in each Torch input tile",
+    )
+    parser.add_argument(
+        "--emulator-blend-factor",
+        type=float,
+        default=1.0,
+        help="Weight on the Torch prediction (0=persistence, 1=full replacement)",
+    )
+    parser.add_argument(
+        "--emulator-print-predictions",
+        action="store_true",
+        help="Write the Torch first guess at every step (large I/O overhead)",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
 
     return parser.parse_args()
@@ -116,8 +149,16 @@ def resolve_paths(args):
     }
 
 
-def setup_member_dir(member_dir, static_dir, baseline_runscript, runname):
+def setup_member_dir(member_dir, static_dir, baseline_runscript, runname, overwrite_existing=False):
     """Copy static files and runscript into the member directory."""
+    if os.path.exists(member_dir):
+        if not overwrite_existing:
+            raise FileExistsError(
+                f"Member directory already exists: {member_dir}\n"
+                "Use --overwrite-existing to replace it, or move/remove it before rerunning."
+            )
+        shutil.rmtree(member_dir)
+
     mkdir(member_dir)
     for fname in STATIC_FILES:
         src = os.path.join(static_dir, fname)
@@ -139,6 +180,14 @@ def main():
 
     if args.emulator == "on" and not args.emulator_model_path:
         raise ValueError("--emulator-model-path is required when --emulator is 'on'")
+    if not 0.0 <= args.emulator_blend_factor <= 1.0:
+        raise ValueError("--emulator-blend-factor must be between 0 and 1")
+    if args.emulator == "on":
+        args.emulator_model_path = os.path.abspath(args.emulator_model_path)
+        if not os.path.isfile(args.emulator_model_path):
+            raise FileNotFoundError(
+                f"Emulator model does not exist: {args.emulator_model_path}"
+            )
 
     paths = resolve_paths(args)
     ensemble_dir = paths["ensemble_dir"]
@@ -164,7 +213,13 @@ def main():
         member_dir = os.path.join(ensemble_dir, f"member_{member_id}")
         print(f"\n[member {member_id}] Setting up in {member_dir}")
 
-        setup_member_dir(member_dir, paths["static_dir"], baseline_runscript, args.runname)
+        setup_member_dir(
+            member_dir,
+            paths["static_dir"],
+            baseline_runscript,
+            args.runname,
+            overwrite_existing=args.overwrite_existing,
+        )
 
         # --- Load run ---
         runscript_path = os.path.join(member_dir, f"{args.runname}.yaml")
@@ -185,8 +240,12 @@ def main():
         if args.emulator == "on":
             run.Solver.TorchEnableAccelerator = True
             run.Solver.TorchModelFilePath = args.emulator_model_path
-            run.Solver.TorchPrintPredictedPressure = True
-            run.Solver.TorchDevice = "cuda"
+            run.Solver.TorchPrintPredictedPressure = args.emulator_print_predictions
+            run.Solver.TorchDebug = False
+            run.Solver.TorchDevice = args.emulator_device
+            run.Solver.TorchModelDtype = args.emulator_dtype
+            run.Solver.TorchIncludeGhostNodes = args.emulator_include_ghost_nodes
+            run.Solver.TorchBlendFactor = args.emulator_blend_factor
 
         # --- Perturbations ---
         indicator_perturbed = False
@@ -205,6 +264,11 @@ def main():
             run, params_applied = perturb_parameters(
                 run, args.perturbation_method, scale=args.param_scale
             )
+
+        # Persist the exact in-memory configuration used for the run.  Without
+        # this write, the member YAML remains the copied baseline even though
+        # ParFlow receives perturbed geometry parameters from ``run``.
+        run.write(os.path.splitext(runscript_path)[0], file_format="yaml")
 
         # --- Distribute ---
         print("  Distributing inputs...")
@@ -232,6 +296,10 @@ def main():
             "param_scale": args.param_scale,
             "emulator": args.emulator,
             "emulator_model_path": args.emulator_model_path,
+            "emulator_device": args.emulator_device,
+            "emulator_dtype": args.emulator_dtype,
+            "emulator_include_ghost_nodes": args.emulator_include_ghost_nodes,
+            "emulator_blend_factor": args.emulator_blend_factor,
             "geom_params": params_applied,
         }
         with open(os.path.join(member_dir, "perturbation.json"), "w") as f:

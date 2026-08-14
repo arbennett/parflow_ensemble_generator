@@ -103,11 +103,14 @@ def _discover_geom_units(run):
         for name in dir(geom):
             unit = getattr(geom, name)
             try:
-                _ = unit.Perm.Value
-                _ = unit.Porosity.Value
-                units.append(name)
+                float(unit.Perm.Value)
+                float(unit.Porosity.Value)
             except AttributeError:
                 pass
+            except (TypeError, ValueError):
+                pass
+            else:
+                units.append(name)
     except AttributeError:
         pass
     return units
