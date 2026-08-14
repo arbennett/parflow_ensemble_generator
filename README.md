@@ -5,11 +5,11 @@ Tools for subsetting the CONUS2 domain, running baseline ParFlow-CLM transient s
 ## Workflow
 
 ```
-0_subset_baseline.py   →   1_run_baseline.py   →   2_run_ensemble.py
-      (subset)               (single run)            (N perturbed runs)
+0_subset_baseline.py   →   1_run_baseline.py   →   2_run_ensemble.py   →   3_visualize_ensemble.py
+      (subset)               (single run)            (N perturbed runs)        (diagnostic plots)
 ```
 
-`0_subset_baseline.py` must be run first. Scripts `1` and `2` are independent of each other — run either or both using the same path arguments.
+`0_subset_baseline.py` must be run first. Scripts `1` and `2` are independent of each other — run either or both using the same path arguments. `3_visualize_ensemble.py` reads whatever `2_run_ensemble.py` has already written.
 
 ---
 
@@ -168,6 +168,51 @@ python 2_run_ensemble.py \
 | `gaussian` | Adds Gaussian noise then snaps to nearest valid class label | Independent `Normal(default, scale × default)` per unit |
 
 Subsurface parameter targets (Ksat, porosity) are discovered dynamically from the loaded runscript — no hardcoded geometry names — so this works for both CONUS1 and CONUS2.
+
+---
+
+### `3_visualize_ensemble.py` — Plot ensemble diagnostics
+
+Reads the member directories written by `2_run_ensemble.py` and writes a set of PNG diagnostics. Nothing is modified; run it as often as you like.
+
+```bash
+python 3_visualize_ensemble.py \
+  --runname my_run \
+  --end 2005-10-03 \
+  --base-dir ./run
+```
+
+**Arguments**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--runname` | `conus2_run` | Must match `0_subset_baseline.py` |
+| `--grid` | `conus2` | Must match `0_subset_baseline.py` |
+| `--end` | `2005-10-03` | Must match `0_subset_baseline.py` |
+| `--base-dir` | `./run` | Must match `0_subset_baseline.py` |
+| `--out-dir` | `{base_dir}/ensemble/figures` | Where the PNGs are written |
+| `--layer` | `-1` | z index shown in map views; `-1` is the top (land surface) layer |
+| `--max-members` | *(all)* | Plot only the first N members |
+| `--time-stride` | `1` | Read every Nth pressure file for the timeseries |
+| `--skip-timeseries` | off | Skip the pressure timeseries (the only slow part) |
+| `--dpi` | `150` | Figure resolution |
+
+**Figures**
+
+| File | Content |
+|---|---|
+| `indicator_maps.png` | Baseline + per-member indicator field, one panel each, shared class colorbar |
+| `indicator_change.png` | Cells whose geologic unit differs from the baseline, with % of layer and % of active volume changed |
+| `param_map_perm.png` | Realized `log10` permeability field per member, shared color scale |
+| `param_map_porosity.png` | Realized porosity field per member, shared color scale |
+| `param_spread.png` | Per-geom-unit Ksat and porosity draws across members, against the baseline value |
+| `pressure_timeseries.png` | Mean pressure head vs time — whole domain and surface layer — one line per member plus the ensemble mean |
+
+Inactive cells are masked out everywhere using `{runname}.out.mask.pfb`; ParFlow fills them with a `-3.4e38` sentinel that would otherwise destroy every average.
+
+Member directories are discovered on disk rather than read from `metadata.csv`, whose `member_dir` column stores absolute paths from the machine that ran the ensemble and goes stale as soon as the run tree moves.
+
+The timeseries reads every pressure file for every member. For a full water year (8761 hourly steps) that is ~90k reads across a 10-member ensemble; pass `--time-stride 6` or `--skip-timeseries` while iterating on the other figures.
 
 ---
 
